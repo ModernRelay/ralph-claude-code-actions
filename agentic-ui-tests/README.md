@@ -195,11 +195,6 @@ Optional description paragraph.
 4. **Claude** verifies assertions and reports results
 5. **GitHub Action** posts summary and PR comment
 
-## Examples
-
-See `tests/fixtures/example-tests/` for more examples:
-- `login.test.md` - Authentication flow
-- `navigation.test.md` - Basic navigation
 
 ## License
 
