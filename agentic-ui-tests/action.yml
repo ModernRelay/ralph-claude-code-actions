@@ -1,0 +1,371 @@
+name: "Agentic UI Tests"
+description: "Run E2E UI tests in plain English using Claude Code with agent-browser automation"
+author: "Equator"
+
+branding:
+  icon: "check-circle"
+  color: "purple"
+
+inputs:
+  claude_code_oauth_token:
+    description: "Claude Code OAuth token (from `claude /login`)"
+    required: true
+
+  github_token:
+    description: "GitHub token for PR comments and API access (required to avoid OIDC validation issues in PRs)"
+    required: false
+    default: ""
+
+  test_dir:
+    description: "Directory containing test markdown files"
+    required: false
+    default: "./e2e-tests"
+
+  base_url:
+    description: "Base URL for the application under test"
+    required: true
+
+  filter:
+    description: "Filter tests by name or tag pattern"
+    required: false
+    default: ""
+
+  tags:
+    description: "Filter tests by tags (comma-separated)"
+    required: false
+    default: ""
+
+  timeout:
+    description: "Test timeout in milliseconds"
+    required: false
+    default: "120000"
+
+  screenshot_mode:
+    description: "Screenshot capture mode: always, on-failure, never"
+    required: false
+    default: "on-failure"
+
+  fail_fast:
+    description: "Stop on first test failure"
+    required: false
+    default: "false"
+
+  secrets_json:
+    description: "JSON object mapping secret names to values for credential interpolation"
+    required: false
+    default: "{}"
+
+  model:
+    description: "Claude model to use"
+    required: false
+    default: "sonnet"
+
+  pr_number:
+    description: "Pull request number (for PR comments)"
+    required: false
+    default: ""
+
+  max_turns:
+    description: "Maximum number of turns for the Claude model"
+    required: false
+    default: "200"
+
+outputs:
+  result:
+    description: "Overall test result: passed or failed"
+    value: ${{ steps.parse-results.outputs.result }}
+
+  passed:
+    description: "Number of passed tests"
+    value: ${{ steps.parse-results.outputs.passed }}
+
+  failed:
+    description: "Number of failed tests"
+    value: ${{ steps.parse-results.outputs.failed }}
+
+  test_count:
+    description: "Number of test files detected"
+    value: ${{ steps.prepare.outputs.test_count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Install agent-browser
+      shell: bash
+      run: |
+        npm install -g agent-browser playwright
+        npx playwright install --with-deps chromium
+
+    - name: Prepare test context
+      id: prepare
+      shell: bash
+      run: |
+        echo "::group::Test Discovery"
+        echo "📁 Test directory: ${{ inputs.test_dir }}"
+        echo "🔍 Searching for *.test.md and *.e2e.md files..."
+        echo ""
+
+        # Check if directory exists
+        if [ ! -d "${{ inputs.test_dir }}" ]; then
+          echo "::error::Test directory does not exist: ${{ inputs.test_dir }}"
+          exit 1
+        fi
+
+        # Show directory structure
+        echo "📂 Directory structure:"
+        find ${{ inputs.test_dir }} -type f -name "*.md" | head -20
+        echo ""
+
+        # Find all test files (using -type f to ensure only files)
+        TEST_FILES=$(find ${{ inputs.test_dir }} -type f \( -name "*.test.md" -o -name "*.e2e.md" \) 2>/dev/null | sort)
+
+        if [ -z "$TEST_FILES" ]; then
+          echo "::error::No test files found in ${{ inputs.test_dir }}"
+          exit 1
+        fi
+
+        # Count tests
+        TEST_COUNT=$(echo "$TEST_FILES" | wc -l | tr -d ' ')
+
+        echo "✅ Found $TEST_COUNT test file(s):"
+        echo "----------------------------------------"
+        echo "$TEST_FILES" | while read -r file; do
+          # Extract test name from frontmatter if possible
+          if [ -f "$file" ]; then
+            NAME=$(grep -m1 "^name:" "$file" 2>/dev/null | sed 's/name: *//' || basename "$file")
+            echo "  📄 $file"
+            echo "     Name: $NAME"
+          fi
+        done
+        echo "----------------------------------------"
+        echo ""
+
+        # Store test file list
+        echo "$TEST_FILES" > /tmp/test-files.txt
+
+        echo "test_count=$TEST_COUNT" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+
+        # Also output to step summary
+        echo "## 🧪 Test Discovery" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Test Directory:** \`${{ inputs.test_dir }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Tests Found:** $TEST_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| File | Name |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+        echo "$TEST_FILES" | while read -r file; do
+          NAME=$(grep -m1 "^name:" "$file" 2>/dev/null | sed 's/name: *//' || basename "$file")
+          echo "| \`$(basename "$file")\` | $NAME |" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+    - name: Run Agentic UI Tests
+      id: run-tests
+      uses: anthropics/claude-code-action@v1
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        github_token: ${{ inputs.github_token }}
+        claude_args: |
+          --allowedTools Bash,Read,Write,Bash(gh pr:*)
+          --max-turns ${{ inputs.max_turns }}
+          --model ${{ inputs.model }}
+        prompt: |
+          You are an E2E test runner. Execute the following E2E tests using agent-browser CLI.
+
+          ## Configuration
+          - Base URL: ${{ inputs.base_url }}
+          - Test Directory: ${{ inputs.test_dir }}
+          - Screenshot Mode: ${{ inputs.screenshot_mode }}
+          - Timeout: ${{ inputs.timeout }}ms
+          - Fail Fast: ${{ inputs.fail_fast }}
+          - PR Number: ${{ inputs.pr_number || github.event.pull_request.number || 'N/A' }}
+
+          ## Secrets (use these exact values, NEVER log them)
+          ${{ inputs.secrets_json }}
+
+          ## Instructions
+
+          1. **Read each test file** from the test directory
+          2. **For each test**, execute the steps using agent-browser:
+             - `agent-browser open <url>` - Navigate to pages
+             - `agent-browser snapshot -i` - Get interactive elements (REQUIRED after navigation)
+             - `agent-browser snapshot -i -c` - Compact output for large pages
+             - `agent-browser click @ref` - Click elements using refs from snapshot
+             - `agent-browser fill @ref "text"` - Fill input fields
+             - `agent-browser type @ref "text"` - Type into element (triggers key events)
+             - `agent-browser press Enter` - Press keyboard key
+             - `agent-browser select @ref "option"` - Select dropdown option
+             - `agent-browser scroll down 500` - Scroll page
+             - `agent-browser wait --text "..."` - Wait for text to appear
+             - `agent-browser wait --url "**/path"` - Wait for URL pattern
+             - `agent-browser wait --load networkidle` - Wait for network idle
+             - `agent-browser get url` - Get current URL (for assertions)
+             - `agent-browser screenshot <name>.png` - Capture screenshots
+
+          3. **For steps marked with `**Assert**:`**, verify the condition and record pass/fail
+
+          4. **Track results** for each test and step
+
+          5. **After all tests**, create a summary report
+
+          ## Workflow for each test
+
+          ```
+          1. Read ALL test markdown files first to build dependency graph
+          2. Parse the frontmatter for config (timeout, retries, dependsOn, profile, saveProfile)
+          3. Order tests: run tests with no dependencies first, then dependent tests
+          4. For each test:
+             a. If `profile` is set, load saved state: `agent-browser state load profiles/<profile>.json`
+             b. If `dependsOn` is set, verify all dependencies passed (skip if any failed)
+             c. Replace {{VARIABLE}} placeholders with secrets
+             d. Execute each step:
+                - Run agent-browser commands
+                - Take snapshots to see element refs
+                - Interact using @refs
+                - Record step result (PASS/FAIL)
+             e. Take screenshot on failure if configured
+             f. If `saveProfile` is set and test passed: `agent-browser state save profiles/<saveProfile>.json`
+          5. Move to next test
+          ```
+
+          ## Test Dependencies & Profiles
+
+          - **dependsOn**: Array of test names that must pass before this test runs
+          - **profile**: Load browser state (cookies, localStorage) from a saved profile
+          - **saveProfile**: Save browser state to a profile after test passes
+
+          Example ordering for tests:
+          - `login.test.md` (no deps, has `saveProfile: authenticated`) → runs first
+          - `create-repo.test.md` (dependsOn: [login], profile: authenticated) → runs after login
+          - `explore-data.test.md` (dependsOn: [login], profile: authenticated) → runs after login
+
+          Profile commands:
+          - Save: `agent-browser state save profiles/authenticated.json`
+          - Load: `agent-browser state load profiles/authenticated.json`
+
+          ## Output Format
+
+          After completing all tests, write results to these files:
+
+          1. `test-results.json` - Full JSON report:
+          ```json
+          {
+            "summary": { "total": N, "passed": N, "failed": N },
+            "tests": [
+              {
+                "name": "Test Name",
+                "passed": true/false,
+                "duration": 1234,
+                "steps": [...]
+              }
+            ]
+          }
+          ```
+
+          2. Write to $GITHUB_STEP_SUMMARY
+
+          3. **Post PR Comment** (REQUIRED): After all tests complete, post a concise summary to the PR using gh CLI.
+
+             Analyze your test results and create a focused, actionable comment:
+             - Lead with the overall status (✅ All Passed or ❌ X Failed)
+             - For failures: Include ONLY the essential error info - what failed and why
+             - Skip verbose step-by-step logs - focus on what matters
+             - Keep it scannable - developers should understand the status in 5 seconds
+
+             Example format:
+             ```
+             ## 🧪 E2E Test Results
+
+             | Status | Total | Passed | Failed |
+             |--------|-------|--------|--------|
+             | ✅ | 5 | 5 | 0 |
+
+             All tests passed successfully.
+             ```
+
+             Or for failures:
+             ```
+             ## 🧪 E2E Test Results
+
+             | Status | Total | Passed | Failed |
+             |--------|-------|--------|--------|
+             | ❌ | 5 | 3 | 2 |
+
+             ### Failed Tests
+             - **Login Flow**: Authentication failed - invalid credentials error
+             - **Data Export**: Timeout waiting for download button
+
+             <details>
+             <summary>All Results</summary>
+
+             - ✅ Homepage Load
+             - ✅ Navigation
+             - ❌ Login Flow
+             - ✅ Search
+             - ❌ Data Export
+             </details>
+             ```
+
+             Post the comment (if PR number is available):
+             ```bash
+             if [ -n "${{ inputs.pr_number || github.event.pull_request.number || '' }}" ] && [ "${{ inputs.pr_number || github.event.pull_request.number || '' }}" != "N/A" ]; then
+               gh pr comment ${{ inputs.pr_number || github.event.pull_request.number }} --body "$(cat <<'EOF'
+             <your markdown comment here>
+             EOF
+             )"
+             else
+               echo "No valid PR number available, skipping comment posting"
+             fi
+             ```
+          ## Begin Testing
+
+          Start by listing the test files in ${{ inputs.test_dir }} and then execute each one.
+
+    - name: Parse results
+      id: parse-results
+      if: always()
+      shell: bash
+      run: |
+        if [ -f test-results.json ]; then
+          PASSED=$(jq -r '.summary.passed // 0' test-results.json)
+          FAILED=$(jq -r '.summary.failed // 0' test-results.json)
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "result=failed" >> $GITHUB_OUTPUT
+          else
+            echo "result=passed" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "result=unknown" >> $GITHUB_OUTPUT
+          echo "passed=0" >> $GITHUB_OUTPUT
+          echo "failed=0" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload Screenshots
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: agentic-ui-tests-screenshots
+        path: |
+          screenshots/
+          *.png
+        retention-days: 7
+        if-no-files-found: ignore
+
+    - name: Upload Test Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: agentic-ui-tests-report
+        path: test-results.json
+        retention-days: 30
+        if-no-files-found: ignore
