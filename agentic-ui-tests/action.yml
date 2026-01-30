@@ -193,23 +193,40 @@ runs:
           ## Instructions
 
           1. **Read each test file** from the test directory
-          2. **For each test**, execute the steps using agent-browser:
-             - `agent-browser open <url>` - Navigate to pages
-             - `agent-browser snapshot -i` - Get interactive elements (REQUIRED after navigation)
-             - `agent-browser snapshot -i -c` - Compact output for large pages
-             - `agent-browser click @ref` - Click elements using refs from snapshot
-             - `agent-browser fill @ref "text"` - Fill input fields
-             - `agent-browser type @ref "text"` - Type into element (triggers key events)
-             - `agent-browser press Enter` - Press keyboard key
-             - `agent-browser select @ref "option"` - Select dropdown option
-             - `agent-browser scroll down 500` - Scroll page
-             - `agent-browser wait --text "..."` - Wait for text to appear
-             - `agent-browser wait --url "**/path"` - Wait for URL pattern
-             - `agent-browser wait --load networkidle` - Wait for network idle
-             - `agent-browser get url` - Get current URL (for assertions)
-             - `agent-browser screenshot <name>.png` - Capture screenshots
-
+          2. **For each test**, execute the steps using agent-browser commands below
           3. **For steps marked with `**Assert**:`**, verify the condition and record pass/fail
+
+          ## agent-browser Commands
+
+          ### Core Workflow
+          - `agent-browser open <url>` - Navigate to URL
+          - `agent-browser snapshot -i` - Get interactive elements with refs (REQUIRED after navigation)
+          - `agent-browser snapshot -i -c` - Compact output for large pages
+
+          ### Interactions
+          - `agent-browser click @ref` - Click element
+          - `agent-browser fill @ref "text"` - Clear and fill input field
+          - `agent-browser type @ref "text"` - Type with key events
+          - `agent-browser press Enter` - Press key (Enter, Tab, Escape)
+          - `agent-browser select @ref "option"` - Select dropdown option
+          - `agent-browser check @ref` / `uncheck @ref` - Checkbox control
+          - `agent-browser hover @ref` - Hover (for dropdowns/tooltips)
+
+          ### Assertions
+          - `agent-browser get text @ref` - Get element text
+          - `agent-browser get value @ref` - Get input value
+          - `agent-browser get url` - Get current URL
+          - `agent-browser get title` - Get page title
+          - `agent-browser is visible @ref` - Check visibility
+
+          ### Waiting
+          - `agent-browser wait --text "..."` - Wait for text to appear
+          - `agent-browser wait --url "**/path"` - Wait for URL pattern
+          - `agent-browser wait --load networkidle` - Wait for network idle
+
+          ### Other
+          - `agent-browser scroll down 500` - Scroll page
+          - `agent-browser screenshot <name>.png` - Capture screenshot
 
           4. **Track results** for each test and step
 

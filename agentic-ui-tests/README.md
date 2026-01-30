@@ -196,6 +196,23 @@ Optional description paragraph.
 5. **GitHub Action** posts summary and PR comment
 
 
+## Roadmap
+
+### Learned Execution Paths
+
+Currently, Claude interprets and executes one step at a time.
+
+Soon, Claude will record the "trail" on first run - mapping intents to selectors:
+
+```
+"Click the Sign In button"  →  button[type=submit], text="Sign In"
+"Enter email"               →  input[name=email], label="Email address"
+```
+
+On subsequent runs, Claude executes multiple steps as chained commands using the cached selectors, only re-interpreting when one fails.
+
+The trail is a hint, not a script - Claude still adapts when the UI changes.
+
 ## License
 
 MIT
