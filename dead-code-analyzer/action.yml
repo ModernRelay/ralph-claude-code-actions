@@ -1,0 +1,275 @@
+name: "Dead Code Analyzer"
+description: "Analyze dead code in TypeScript/JavaScript projects using Claude Code and Knip"
+author: "ModernRelay"
+
+branding:
+  icon: "trash-2"
+  color: "orange"
+
+inputs:
+  claude_code_oauth_token:
+    description: "Claude Code OAuth token (from `claude /login`)"
+    required: true
+
+  github_token:
+    description: "GitHub token for PR comments and issue creation"
+    required: false
+    default: ""
+
+  pr_number:
+    description: "Pull request number (for PR comments). Auto-detected if not provided."
+    required: false
+    default: ""
+
+  changed_files:
+    description: "List of changed files (newline-separated). For PR mode, focuses analysis on these files."
+    required: false
+    default: ""
+
+  config_path:
+    description: "Path to knip configuration file"
+    required: false
+    default: "knip.json"
+
+  working_directory:
+    description: "Working directory for running analysis"
+    required: false
+    default: "."
+
+  package_manager:
+    description: "Package manager to use (npm, yarn, pnpm)"
+    required: false
+    default: "pnpm"
+
+  install_command:
+    description: "Custom install command. Defaults to package manager install."
+    required: false
+    default: ""
+
+  knip_args:
+    description: "Additional arguments to pass to knip"
+    required: false
+    default: ""
+
+  model:
+    description: "Claude model to use"
+    required: false
+    default: "sonnet"
+
+  max_turns:
+    description: "Maximum number of turns for the Claude model"
+    required: false
+    default: "100"
+
+  create_issue:
+    description: "Create GitHub issue for comprehensive analysis (non-PR mode)"
+    required: false
+    default: "true"
+
+  issue_labels:
+    description: "Labels for created issues (comma-separated)"
+    required: false
+    default: "dead-code,automated"
+
+outputs:
+  result:
+    description: "Analysis result: clean or issues-found"
+    value: ${{ steps.analyze.outputs.result }}
+
+  issues_count:
+    description: "Number of dead code issues found"
+    value: ${{ steps.analyze.outputs.issues_count }}
+
+  report_path:
+    description: "Path to the generated report file"
+    value: ${{ steps.analyze.outputs.report_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Detect event context
+      id: context
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.pr_number }}" ]; then
+          echo "mode=pr" >> $GITHUB_OUTPUT
+          echo "pr_number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
+        elif [ -n "${{ github.event.pull_request.number }}" ]; then
+          echo "mode=pr" >> $GITHUB_OUTPUT
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+        else
+          echo "mode=comprehensive" >> $GITHUB_OUTPUT
+          echo "pr_number=" >> $GITHUB_OUTPUT
+        fi
+
+        echo "📋 Analysis mode: $(cat $GITHUB_OUTPUT | grep mode | cut -d= -f2)"
+
+    - name: Collect changed files (PR mode)
+      id: changed_files
+      if: steps.context.outputs.mode == 'pr' && inputs.changed_files == ''
+      shell: bash
+      run: |
+        if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.sha }}"
+
+          CHANGED_TS=$(git diff --name-only $BASE_SHA $HEAD_SHA -- '*.ts' '*.tsx' '*.js' '*.jsx' \
+            | grep -v '\.test\.' | grep -v '\.spec\.' | grep -v '__tests__' | head -50 || echo "")
+
+          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_TS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          FILE_COUNT=$(echo "$CHANGED_TS" | grep -c . || echo "0")
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "📁 Found $FILE_COUNT changed TypeScript/JavaScript files"
+        fi
+
+    - name: Run Claude Dead Code Analysis
+      id: analyze
+      uses: anthropics/claude-code-action@v1
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        github_token: ${{ inputs.github_token }}
+        claude_args: |
+          --allowedTools Read,Glob,Grep,Write,Bash(npx knip:*),Bash(pnpm knip:*),Bash(npm run knip:*),Bash(yarn knip:*),Bash(gh pr:*),Bash(gh issue:*),Bash(git diff:*),Bash(date:*)
+          --max-turns ${{ inputs.max_turns }}
+          --model ${{ inputs.model }}
+        prompt: |
+          You are a dead code analyzer. Perform static analysis to find unused code in this repository.
+
+          ## Configuration
+          - Mode: ${{ steps.context.outputs.mode }}
+          - Working Directory: ${{ inputs.working_directory }}
+          - Knip Config: ${{ inputs.config_path }}
+          - Package Manager: ${{ inputs.package_manager }}
+          ${{ steps.context.outputs.pr_number != '' && format('- PR Number: {0}', steps.context.outputs.pr_number) || '' }}
+
+          ## Changed Files (PR Mode)
+          ${{ inputs.changed_files || steps.changed_files.outputs.changed_files || 'N/A - Comprehensive analysis' }}
+
+          ## Instructions
+
+          ### Tool: Knip
+
+          Use knip for static dead code analysis:
+          ```bash
+          npx knip --reporter markdown ${{ inputs.knip_args }}
+          ```
+
+          - Exit code 1 means issues found (this is expected, not an error)
+          - Config file: `${{ inputs.config_path }}`
+          - If knip is not configured, it will use sensible defaults
+
+          ${{ steps.context.outputs.mode == 'pr' && format('### PR Mode: Focus on Changed Files
+
+          1. **Run Knip** to check the overall state of the codebase
+          2. **Analyze changed files** specifically for:
+             - New exports that are not imported anywhere
+             - New functions/components that are not used
+             - Unused imports in the changed files
+             - Commented-out code blocks
+             - Backward-compatibility shims (`_unused` vars, re-exports)
+             - `// TODO: remove`, `// deprecated` comments
+
+          3. **Check deletions**: If code was removed, verify nothing depends on it
+
+          4. **Post PR comment** with findings:
+             - If issues found: List them with file:line references and suggestions
+             - If clean: Brief "✅ No dead code issues found" message
+
+          Format the comment concisely:
+          ```markdown
+          ## 🧹 Dead Code Analysis
+
+          | Status | Issues |
+          |--------|--------|
+          | ✅/⚠️ | N |
+
+          ### Issues Found (if any)
+          - **file.ts:42** - Unused export `functionName`
+          - **component.tsx:15** - Unused import `SomeType`
+
+          <details>
+          <summary>Knip Output</summary>
+
+          ```
+          [knip output here]
+          ```
+          </details>
+          ```
+
+          Post the comment:
+          ```bash
+          gh pr comment {0} --body-file dead-code-report.md
+          ```', steps.context.outputs.pr_number) || '### Comprehensive Mode: Full Codebase Analysis
+
+          1. **Run Knip** for comprehensive static analysis
+          2. **Deep analysis** beyond knip:
+             - Backward-compatibility shims (re-exports, `_unused` vars, `// removed` comments)
+             - Commented-out code blocks (not doc comments)
+             - Dead patterns (always-true flags, unreachable code)
+             - Orphaned test utilities and fixtures
+             - Stale dependency patterns
+
+          3. **Categorize findings by priority**:
+             - **High Priority**: Unused dependencies, unused files, unresolved imports, compat shims
+             - **Medium Priority**: Unused exports, commented code, duplicate exports
+             - **Low Priority**: Unused types, dead patterns needing verification
+
+          4. **Create GitHub issue** with prioritized findings:
+             - Executive summary with counts
+             - Collapsible sections for long lists
+             - file:line references
+             - Confidence levels (certain, likely, possible)
+
+          ' }}
+
+          ${{ steps.context.outputs.mode == 'comprehensive' && inputs.create_issue == 'true' && format('Create the issue:
+          ```bash
+          gh issue create \\
+            --title "Dead Code Report - $(date +%Y-%m-%d)" \\
+            --label "{0}" \\
+            --body-file dead-code-report.md
+          ```', inputs.issue_labels) || '' }}
+
+          ## Output
+
+          After analysis, write results to:
+          1. `dead-code-report.md` - Human-readable report
+          2. `dead-code-results.json` - Machine-readable results:
+          ```json
+          {
+            "result": "clean" | "issues-found",
+            "issues_count": N,
+            "summary": {
+              "unused_files": N,
+              "unused_exports": N,
+              "unused_dependencies": N,
+              "unused_types": N
+            },
+            "issues": [...]
+          }
+          ```
+
+          Write the outputs for GitHub Actions:
+          ```bash
+          echo "result=<clean|issues-found>" >> $GITHUB_OUTPUT
+          echo "issues_count=<N>" >> $GITHUB_OUTPUT
+          echo "report_path=dead-code-report.md" >> $GITHUB_OUTPUT
+          ```
+
+          ## Begin Analysis
+
+          Start by running knip and analyzing the results.
+
+    - name: Upload Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dead-code-report
+        path: |
+          dead-code-report.md
+          dead-code-results.json
+        retention-days: 30
+        if-no-files-found: ignore

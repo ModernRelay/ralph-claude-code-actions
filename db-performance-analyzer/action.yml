@@ -1,0 +1,388 @@
+name: "DB Performance Analyzer"
+description: "Analyze PostgreSQL database performance using Claude Code with EXPLAIN ANALYZE"
+author: "ModernRelay"
+
+branding:
+  icon: "database"
+  color: "blue"
+
+inputs:
+  claude_code_oauth_token:
+    description: "Claude Code OAuth token (from `claude /login`)"
+    required: true
+
+  github_token:
+    description: "GitHub token for PR comments and issue creation"
+    required: false
+    default: ""
+
+  database_url:
+    description: "PostgreSQL connection string (e.g., postgresql://user:pass@host:5432/db)"
+    required: true
+
+  pr_number:
+    description: "Pull request number (for PR comments). Auto-detected if not provided."
+    required: false
+    default: ""
+
+  sql_files:
+    description: "SQL files to analyze (newline-separated paths). For PR mode, auto-detected from changes."
+    required: false
+    default: ""
+
+  functions:
+    description: "Specific PostgreSQL functions to analyze (comma-separated)"
+    required: false
+    default: ""
+
+  mode:
+    description: "Analysis mode: pr, comprehensive, or specific"
+    required: false
+    default: ""
+
+  schemas_dir:
+    description: "Directory containing SQL schema files (for context)"
+    required: false
+    default: ""
+
+  migrations_dir:
+    description: "Directory containing migration files (for context)"
+    required: false
+    default: ""
+
+  slow_query_threshold_ms:
+    description: "Threshold in milliseconds to flag slow queries"
+    required: false
+    default: "100"
+
+  model:
+    description: "Claude model to use"
+    required: false
+    default: "sonnet"
+
+  max_turns:
+    description: "Maximum number of turns for the Claude model"
+    required: false
+    default: "150"
+
+  create_issue:
+    description: "Create GitHub issue for comprehensive analysis (non-PR mode)"
+    required: false
+    default: "true"
+
+  issue_labels:
+    description: "Labels for created issues (comma-separated)"
+    required: false
+    default: "performance,database,automated"
+
+outputs:
+  result:
+    description: "Analysis result: optimal, warnings, or issues-found"
+    value: ${{ steps.analyze.outputs.result }}
+
+  issues_count:
+    description: "Number of performance issues found"
+    value: ${{ steps.analyze.outputs.issues_count }}
+
+  slow_queries_count:
+    description: "Number of slow queries detected"
+    value: ${{ steps.analyze.outputs.slow_queries_count }}
+
+  report_path:
+    description: "Path to the generated report file"
+    value: ${{ steps.analyze.outputs.report_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install PostgreSQL client
+      shell: bash
+      run: |
+        if ! command -v psql &> /dev/null; then
+          if [ -f /etc/debian_version ]; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client
+          elif [ -f /etc/redhat-release ]; then
+            sudo yum install -y postgresql
+          elif command -v brew &> /dev/null; then
+            brew install postgresql
+          fi
+        fi
+        psql --version
+
+    - name: Detect event context
+      id: context
+      shell: bash
+      run: |
+        # Determine mode
+        if [ -n "${{ inputs.mode }}" ]; then
+          MODE="${{ inputs.mode }}"
+        elif [ -n "${{ inputs.functions }}" ]; then
+          MODE="specific"
+        elif [ -n "${{ inputs.pr_number }}" ] || [ -n "${{ github.event.pull_request.number }}" ]; then
+          MODE="pr"
+        else
+          MODE="comprehensive"
+        fi
+
+        echo "mode=$MODE" >> $GITHUB_OUTPUT
+
+        # Determine PR number
+        if [ -n "${{ inputs.pr_number }}" ]; then
+          echo "pr_number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
+        elif [ -n "${{ github.event.pull_request.number }}" ]; then
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+        else
+          echo "pr_number=" >> $GITHUB_OUTPUT
+        fi
+
+        echo "📋 Analysis mode: $MODE"
+
+    - name: Collect changed SQL files (PR mode)
+      id: changed_files
+      if: steps.context.outputs.mode == 'pr' && inputs.sql_files == ''
+      shell: bash
+      run: |
+        if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.sha }}"
+
+          CHANGED_SQL=$(git diff --name-only $BASE_SHA $HEAD_SHA -- '*.sql' 2>/dev/null | head -30 || echo "")
+
+          echo "sql_files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_SQL" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Extract function definitions from changed files
+          FUNCTIONS=""
+          for file in $CHANGED_SQL; do
+            if [ -f "$file" ]; then
+              FUNCS=$(grep -oP 'CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+\K[a-zA-Z_][a-zA-Z0-9_\.]*' "$file" 2>/dev/null || true)
+              if [ -n "$FUNCS" ]; then
+                FUNCTIONS="$FUNCTIONS$file:\n$FUNCS\n\n"
+              fi
+            fi
+          done
+
+          echo "functions<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$FUNCTIONS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          FILE_COUNT=$(echo "$CHANGED_SQL" | grep -c . || echo "0")
+          echo "📁 Found $FILE_COUNT changed SQL files"
+        fi
+
+    - name: Verify database connection
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
+      run: |
+        echo "🔌 Verifying database connection..."
+        if psql "$DATABASE_URL" -c "SELECT 1" > /dev/null 2>&1; then
+          echo "✅ Database connection successful"
+        else
+          echo "❌ Failed to connect to database"
+          exit 1
+        fi
+
+    - name: Run Claude DB Performance Analysis
+      id: analyze
+      uses: anthropics/claude-code-action@v1
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        github_token: ${{ inputs.github_token }}
+        claude_args: |
+          --allowedTools Read,Write,Glob,Grep,Bash(psql:*),Bash(gh pr:*),Bash(gh issue:*),Bash(git diff:*),Bash(date:*)
+          --max-turns ${{ inputs.max_turns }}
+          --model ${{ inputs.model }}
+        prompt: |
+          You are a PostgreSQL performance analyst. Analyze database functions and queries for performance issues.
+
+          ## Configuration
+          - Mode: ${{ steps.context.outputs.mode }}
+          - Slow Query Threshold: ${{ inputs.slow_query_threshold_ms }}ms
+          - Database URL: Available as $DATABASE_URL environment variable
+          ${{ steps.context.outputs.pr_number != '' && format('- PR Number: {0}', steps.context.outputs.pr_number) || '' }}
+          ${{ inputs.schemas_dir != '' && format('- Schemas Directory: {0}', inputs.schemas_dir) || '' }}
+          ${{ inputs.migrations_dir != '' && format('- Migrations Directory: {0}', inputs.migrations_dir) || '' }}
+
+          ## Target Functions
+          ${{ inputs.functions || steps.changed_files.outputs.functions || 'Auto-detect from analysis' }}
+
+          ## Changed SQL Files (PR Mode)
+          ${{ inputs.sql_files || steps.changed_files.outputs.sql_files || 'N/A' }}
+
+          ## Instructions
+
+          ### Connecting to Database
+
+          Use psql with the DATABASE_URL environment variable:
+          ```bash
+          psql "$DATABASE_URL" -c "YOUR SQL HERE"
+          ```
+
+          ### Analysis Techniques
+
+          1. **EXPLAIN ANALYZE** - Get actual execution plans:
+          ```sql
+          EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT ...;
+          ```
+
+          2. **Function Analysis** - For PL/pgSQL functions:
+          ```sql
+          -- Get function definition
+          SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = 'function_name';
+
+          -- Analyze function with test parameters
+          EXPLAIN (ANALYZE, BUFFERS) SELECT function_name(params);
+          ```
+
+          3. **Index Usage** - Check if indexes are being used:
+          ```sql
+          SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read
+          FROM pg_stat_user_indexes
+          WHERE schemaname = 'public'
+          ORDER BY idx_scan DESC;
+          ```
+
+          4. **Table Statistics** - Check table health:
+          ```sql
+          SELECT relname, n_live_tup, n_dead_tup, last_vacuum, last_analyze
+          FROM pg_stat_user_tables;
+          ```
+
+          ${{ steps.context.outputs.mode == 'pr' && '### PR Mode: Analyze Changed Functions
+
+          1. **Read changed SQL files** to understand what was modified
+          2. **For each new/modified function**:
+             - Get the function definition
+             - Run EXPLAIN ANALYZE with representative parameters
+             - Check for sequential scans on large tables
+             - Verify index usage
+             - Look for N+1 query patterns
+
+          3. **Identify issues**:
+             - Sequential scans where indexes exist
+             - Missing indexes on frequently filtered columns
+             - Expensive JOINs without proper indexes
+             - Functions that could benefit from caching
+             - Queries exceeding the slow query threshold
+
+          4. **Post PR comment** with findings and recommendations' || '### Comprehensive Mode: Full Database Analysis
+
+          1. **Catalog all functions** in the public schema
+          2. **Analyze critical functions** (those called frequently or processing data)
+          3. **Check for**:
+             - Missing indexes on foreign keys
+             - Unused indexes (consuming space)
+             - Tables needing VACUUM/ANALYZE
+             - Functions with poor execution plans
+             - Potential N+1 patterns
+
+          4. **Create prioritized report**:
+             - Critical: Queries > 1s, sequential scans on large tables
+             - Warning: Queries > threshold, missing indexes
+             - Info: Optimization suggestions' }}
+
+          ${{ steps.context.outputs.mode == 'specific' && format('### Specific Mode: Analyze Requested Functions
+
+          Analyze these specific functions: {0}
+
+          For each function:
+          1. Get the function definition
+          2. Run EXPLAIN ANALYZE with various parameter combinations
+          3. Profile execution time
+          4. Identify bottlenecks and suggest optimizations', inputs.functions) || '' }}
+
+          ## Output Format
+
+          ### PR Comment (PR Mode)
+
+          ```markdown
+          ## 📊 Database Performance Analysis
+
+          | Metric | Value |
+          |--------|-------|
+          | Functions Analyzed | N |
+          | Issues Found | N |
+          | Slow Queries | N |
+
+          ### Issues Found
+
+          #### 🔴 Critical
+          - **`function_name`** - Sequential scan on `table` (estimated 10k rows)
+            - **Fix**: Add index on `column`
+
+          #### 🟡 Warnings
+          - **`other_function`** - Query time: 150ms (threshold: 100ms)
+            - **Suggestion**: Consider caching or pagination
+
+          <details>
+          <summary>Execution Plans</summary>
+
+          ```sql
+          -- function_name
+          EXPLAIN ANALYZE output...
+          ```
+          </details>
+          ```
+
+          Post the comment:
+          ```bash
+          gh pr comment ${{ steps.context.outputs.pr_number }} --body-file db-performance-report.md
+          ```
+
+          ### Issue (Comprehensive Mode)
+
+          ${{ steps.context.outputs.mode == 'comprehensive' && inputs.create_issue == 'true' && format('Create the issue:
+          ```bash
+          gh issue create \\
+            --title "Database Performance Report - $(date +%Y-%m-%d)" \\
+            --label "{0}" \\
+            --body-file db-performance-report.md
+          ```', inputs.issue_labels) || '' }}
+
+          ### Results File
+
+          Write to `db-performance-results.json`:
+          ```json
+          {
+            "result": "optimal" | "warnings" | "issues-found",
+            "issues_count": N,
+            "slow_queries_count": N,
+            "functions_analyzed": N,
+            "issues": [
+              {
+                "severity": "critical" | "warning" | "info",
+                "function": "name",
+                "issue": "description",
+                "suggestion": "how to fix",
+                "execution_time_ms": N
+              }
+            ]
+          }
+          ```
+
+          Write GitHub Actions outputs:
+          ```bash
+          echo "result=<optimal|warnings|issues-found>" >> $GITHUB_OUTPUT
+          echo "issues_count=<N>" >> $GITHUB_OUTPUT
+          echo "slow_queries_count=<N>" >> $GITHUB_OUTPUT
+          echo "report_path=db-performance-report.md" >> $GITHUB_OUTPUT
+          ```
+
+          ## Begin Analysis
+
+          Start by checking the database connection and then proceed with the analysis based on the mode.
+
+    - name: Upload Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: db-performance-report
+        path: |
+          db-performance-report.md
+          db-performance-results.json
+        retention-days: 30
+        if-no-files-found: ignore

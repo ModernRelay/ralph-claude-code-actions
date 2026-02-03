@@ -7,6 +7,8 @@ A collection of GitHub Actions powered by Claude Code for automating development
 | Action | Description |
 |--------|-------------|
 | [agentic-ui-tests](./agentic-ui-tests) | Run E2E UI tests written in plain English markdown |
+| [db-performance-analyzer](./db-performance-analyzer) | Analyze PostgreSQL database performance using EXPLAIN ANALYZE |
+| [dead-code-analyzer](./dead-code-analyzer) | Detect dead code in TypeScript/JavaScript projects using Knip |
 
 ## Usage
 
