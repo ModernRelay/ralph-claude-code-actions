@@ -17,9 +17,9 @@ jobs:
       - name: Validate action.yml files
         run: |
           echo "🔍 Validating action.yml files..."
-          
+
           ERRORS=0
-          
+
           for action_dir in */; do
             if [ -f "${action_dir}action.yml" ]; then
               echo "📦 Checking ${action_dir}action.yml"
@@ -51,22 +51,22 @@ jobs:
               echo "  ✅ Required fields present"
             fi
           done
-          
+
           if [ $ERRORS -gt 0 ]; then
             echo ""
             echo "❌ Found $ERRORS validation error(s)"
             exit 1
           fi
-          
+
           echo ""
           echo "✅ All action.yml files are valid"
 
       - name: Check README exists for each action
         run: |
           echo "📚 Checking README files..."
-          
+
           MISSING=0
-          
+
           for action_dir in */; do
             if [ -f "${action_dir}action.yml" ]; then
               if [ ! -f "${action_dir}README.md" ]; then
@@ -77,13 +77,13 @@ jobs:
               fi
             fi
           done
-          
+
           if [ $MISSING -gt 0 ]; then
             echo ""
             echo "⚠️  $MISSING action(s) missing README.md"
             exit 1
           fi
-          
+
           echo ""
           echo "✅ All actions have README files"
 
@@ -134,7 +134,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Action | Description |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------------|" >> $GITHUB_STEP_SUMMARY
-          
+
           for action_dir in */; do
             if [ -f "${action_dir}action.yml" ]; then
               ACTION_NAME=$(echo "$action_dir" | sed 's/\///')
@@ -142,7 +142,7 @@ jobs:
               echo "| \`${ACTION_NAME}\` | ${DESCRIPTION} |" >> $GITHUB_STEP_SUMMARY
             fi
           done
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "✅ CI completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
