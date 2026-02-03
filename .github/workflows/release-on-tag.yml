@@ -1,0 +1,101 @@
+name: Release on Tag
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release from Tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version info
+        id: version
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          MAJOR_VERSION="v$(echo $VERSION | cut -d. -f1)"
+          
+          # Check if prerelease
+          if [[ "$VERSION" =~ -[a-zA-Z] ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "major=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 $TAG^ 2>/dev/null || echo "")
+          
+          echo "## What's Changed" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          
+          if [ -n "$PREV_TAG" ]; then
+            echo "Changes since $PREV_TAG:" >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log ${PREV_TAG}..${TAG} --pretty=format:"- %s (%h)" >> CHANGELOG.md
+          else
+            echo "Initial release" >> CHANGELOG.md
+          fi
+          
+          echo "" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "## Actions Included" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          
+          for action_dir in */; do
+            if [ -f "${action_dir}action.yml" ]; then
+              ACTION_NAME=$(echo "$action_dir" | sed 's/\///')
+              DESCRIPTION=$(grep "^description:" "${action_dir}action.yml" | head -1 | sed 's/description: *//' | sed 's/"//g')
+              echo "### ${ACTION_NAME}" >> CHANGELOG.md
+              echo "${DESCRIPTION}" >> CHANGELOG.md
+              echo "" >> CHANGELOG.md
+              echo "\`\`\`yaml" >> CHANGELOG.md
+              echo "- uses: ${{ github.repository }}/${ACTION_NAME}@${TAG}" >> CHANGELOG.md
+              echo "\`\`\`" >> CHANGELOG.md
+              echo "" >> CHANGELOG.md
+            fi
+          done
+
+      - name: Update major version tag
+        if: steps.version.outputs.prerelease == 'false'
+        run: |
+          MAJOR="${{ steps.version.outputs.major }}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Delete existing major version tag if it exists (locally and remote)
+          git tag -d "$MAJOR" 2>/dev/null || true
+          git push origin ":refs/tags/$MAJOR" 2>/dev/null || true
+          
+          # Create new major version tag
+          git tag -a "$MAJOR" -m "Release $MAJOR (points to ${{ steps.version.outputs.tag }})"
+          git push origin "$MAJOR"
+          
+          echo "✅ Updated $MAJOR to point to ${{ steps.version.outputs.tag }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body_path: CHANGELOG.md
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          generate_release_notes: true

@@ -1,0 +1,53 @@
+version: 2
+updates:
+  # Update GitHub Actions versions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci/cd"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Update actions in agentic-ui-tests
+  - package-ecosystem: "github-actions"
+    directory: "/agentic-ui-tests"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "agentic-ui-tests"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Update actions in db-performance-analyzer
+  - package-ecosystem: "github-actions"
+    directory: "/db-performance-analyzer"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "db-performance-analyzer"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Update actions in dead-code-analyzer
+  - package-ecosystem: "github-actions"
+    directory: "/dead-code-analyzer"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "dead-code-analyzer"
+    commit-message:
+      prefix: "chore(deps)"

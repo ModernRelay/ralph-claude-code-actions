@@ -1,0 +1,10 @@
+# Default owners for everything
+* @ModernRelay
+
+# Action-specific ownership (add team members as needed)
+/agentic-ui-tests/ @ModernRelay
+/db-performance-analyzer/ @ModernRelay
+/dead-code-analyzer/ @ModernRelay
+
+# CI/CD configuration
+/.github/ @ModernRelay
