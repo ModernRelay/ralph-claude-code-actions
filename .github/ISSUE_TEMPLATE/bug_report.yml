@@ -1,0 +1,63 @@
+name: Bug Report
+description: Report a bug with one of the actions
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: dropdown
+    id: action
+    attributes:
+      label: Which action?
+      description: Which action is this bug related to?
+      options:
+        - agentic-ui-tests
+        - db-performance-analyzer
+        - dead-code-analyzer
+        - Other/Multiple
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What version of the action are you using?
+      placeholder: "v1.0.0 or v1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of what the bug is
+      placeholder: Tell us what happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow Configuration
+      description: Please provide your workflow YAML (redact any secrets)
+      render: yaml
+      placeholder: |
+        - uses: ModernRelay/ralph-claude-code-actions/action-name@v1
+          with:
+            ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Logs
+      description: Any relevant error messages or logs
+      render: shell
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true

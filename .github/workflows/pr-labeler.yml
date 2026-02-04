@@ -1,0 +1,72 @@
+name: PR Labeler
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  label:
+    name: Add Labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed actions
+        id: changes
+        run: |
+          # Get changed files in PR
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          
+          LABELS=""
+          
+          # Check each action directory
+          if echo "$CHANGED_FILES" | grep -q "^agentic-ui-tests/"; then
+            LABELS="${LABELS}agentic-ui-tests,"
+          fi
+          
+          if echo "$CHANGED_FILES" | grep -q "^db-performance-analyzer/"; then
+            LABELS="${LABELS}db-performance-analyzer,"
+          fi
+          
+          if echo "$CHANGED_FILES" | grep -q "^dead-code-analyzer/"; then
+            LABELS="${LABELS}dead-code-analyzer,"
+          fi
+          
+          # Check for workflow changes
+          if echo "$CHANGED_FILES" | grep -q "^\.github/"; then
+            LABELS="${LABELS}ci/cd,"
+          fi
+          
+          # Check for documentation changes
+          if echo "$CHANGED_FILES" | grep -qE "\.md$"; then
+            LABELS="${LABELS}documentation,"
+          fi
+          
+          # Remove trailing comma
+          LABELS=$(echo "$LABELS" | sed 's/,$//')
+          
+          echo "labels=$LABELS" >> $GITHUB_OUTPUT
+          echo "Detected labels: $LABELS"
+
+      - name: Add labels to PR
+        if: steps.changes.outputs.labels != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = '${{ steps.changes.outputs.labels }}'.split(',').filter(l => l);
+            
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labels
+              });
+              console.log(`Added labels: ${labels.join(', ')}`);
+            }

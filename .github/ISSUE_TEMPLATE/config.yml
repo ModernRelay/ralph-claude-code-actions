@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/ModernRelay/ralph-claude-code-actions#readme
+    about: Check the documentation before opening an issue

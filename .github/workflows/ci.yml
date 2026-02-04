@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate Actions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate action.yml files
+        run: |
+          echo "🔍 Validating action.yml files..."
+
+          ERRORS=0
+
+          for action_dir in */; do
+            if [ -f "${action_dir}action.yml" ]; then
+              echo "📦 Checking ${action_dir}action.yml"
+              
+              # Check YAML syntax
+              if ! python3 -c "import yaml; yaml.safe_load(open('${action_dir}action.yml'))" 2>/dev/null; then
+                echo "❌ Invalid YAML syntax in ${action_dir}action.yml"
+                ERRORS=$((ERRORS + 1))
+              else
+                echo "  ✅ Valid YAML syntax"
+              fi
+              
+              # Check required fields
+              if ! grep -q "^name:" "${action_dir}action.yml"; then
+                echo "❌ Missing 'name' field in ${action_dir}action.yml"
+                ERRORS=$((ERRORS + 1))
+              fi
+              
+              if ! grep -q "^description:" "${action_dir}action.yml"; then
+                echo "❌ Missing 'description' field in ${action_dir}action.yml"
+                ERRORS=$((ERRORS + 1))
+              fi
+              
+              if ! grep -q "^runs:" "${action_dir}action.yml"; then
+                echo "❌ Missing 'runs' field in ${action_dir}action.yml"
+                ERRORS=$((ERRORS + 1))
+              fi
+              
+              echo "  ✅ Required fields present"
+            fi
+          done
+
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "❌ Found $ERRORS validation error(s)"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All action.yml files are valid"
+
+      - name: Check README exists for each action
+        run: |
+          echo "📚 Checking README files..."
+
+          MISSING=0
+
+          for action_dir in */; do
+            if [ -f "${action_dir}action.yml" ]; then
+              if [ ! -f "${action_dir}README.md" ]; then
+                echo "⚠️  Missing README.md in ${action_dir}"
+                MISSING=$((MISSING + 1))
+              else
+                echo "✅ ${action_dir}README.md exists"
+              fi
+            fi
+          done
+
+          if [ $MISSING -gt 0 ]; then
+            echo ""
+            echo "⚠️  $MISSING action(s) missing README.md"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All actions have README files"
+
+  lint:
+    name: Lint YAML
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Create yamllint config
+        run: |
+          cat > .yamllint.yml << 'EOF'
+          extends: default
+          rules:
+            line-length:
+              max: 200
+              level: warning
+            document-start: disable
+            truthy:
+              check-keys: false
+            comments:
+              min-spaces-from-content: 1
+            indentation:
+              spaces: 2
+              indent-sequences: consistent
+          EOF
+
+      - name: Lint YAML files
+        run: |
+          echo "🔍 Linting YAML files..."
+          yamllint -c .yamllint.yml */action.yml .github/workflows/*.yml || true
+          echo "✅ Linting complete"
+
+  summary:
+    name: Action Summary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate action summary
+        run: |
+          echo "## 📦 Actions in this repository" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Action | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+
+          for action_dir in */; do
+            if [ -f "${action_dir}action.yml" ]; then
+              ACTION_NAME=$(echo "$action_dir" | sed 's/\///')
+              DESCRIPTION=$(grep "^description:" "${action_dir}action.yml" | head -1 | sed 's/description: *//' | sed 's/"//g')
+              echo "| \`${ACTION_NAME}\` | ${DESCRIPTION} |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "✅ CI completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
